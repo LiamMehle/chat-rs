@@ -40,13 +40,28 @@ async fn async_read<T: AsMut<[u8]>>(stream: TcpStream, receive_buffer: &mut T) -
 	}
 }
 
+async fn async_read_exact<T: AsMut<[u8]>>(stream: TcpStream, receive_buffer: &mut T) -> Result<usize, tokio::io::Error> {
+	use tokio::io;
+	let mut buffer_free_slice = receive_buffer.as_mut();
+	loop {
+		stream.ready(Interest::READABLE).await?;
+		match stream.try_read(&mut buffer_free_slice.as_mut()) {
+			Ok(n) if n == buffer_free_slice.len()           => break Ok(n),
+			Ok(n)                                           => buffer_free_slice = buffer_free_slice[n..].as_mut(),
+			Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+			Err(e)                                          => break Err(e)
+		}
+	}
+}
+
 async fn receive_data(address: &str, expected_len: usize) -> Result<String, std::io::Error> {
 	let listener = TcpListener::bind(address).await?;
 	println!("listener created");
-	let (stream, sender_address) = listener.accept().await?;
+	let (stream, _) = listener.accept().await?;
 	// assert_eq!(sender_address.to_owned().to_string().as_str(), address);
-	let mut receive_buffer = [0u8; 1024];
-	let receive_length = async_read(stream, &mut receive_buffer).await?;
+	let mut receive_buffer = Vec::with_capacity(expected_len);
+	receive_buffer.resize(expected_len, 0);
+	let receive_length = async_read_exact(stream, &mut receive_buffer).await?;
 	String::from_utf8(receive_buffer[..receive_length].to_vec()).map_err(|error| Error::new(std::io::ErrorKind::Other, error))
 }
 
