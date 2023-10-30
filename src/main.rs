@@ -79,7 +79,7 @@ async fn receive_data(address: &str, expected_len: usize) -> Result<String, std:
 	// assert_eq!(sender_address.to_owned().to_string().as_str(), address);
 	let mut receive_buffer = Vec::with_capacity(expected_len);
 	receive_buffer.resize(expected_len, 0);
-	let receive_length = async_read_exact(stream, &mut receive_buffer).await?;
+	let receive_length = async_read(stream, &mut receive_buffer).await?;
 	String::from_utf8(receive_buffer[..receive_length].to_vec()).map_err(|error| Error::new(std::io::ErrorKind::Other, error))
 }
 
