@@ -21,21 +21,35 @@ impl<F: Copy + FnOnce() -> ()> Drop for OnDrop<F> {
 
 async fn send_data(address: &str, payload: &[u8]) -> Result<usize, std::io::Error> {
 	use tokio::io::AsyncWriteExt;
+	use tokio::io::ErrorKind::{WouldBlock, ConnectionRefused, NotConnected};
 	let _ = OnDrop::new(||{println!("send_data exited")});
-	let mut sender = TcpStream::connect(address).await?;
-	// sender.ready(Interest::WRITABLE).await?;
-	sender.write_all(payload).await.map(|_|payload.len())
+	let mut sender = loop {
+		let should_retry_on = |e: &tokio::io::Error| { [WouldBlock, ConnectionRefused, NotConnected].contains(&e.kind()) };
+		match TcpStream::connect(address).await {
+			Ok(x) => break x,
+			Err(e) if should_retry_on(&e) => continue,
+			Err(e) => return Err(e)
+		}
+	};
+	sender.ready(Interest::WRITABLE).await?;
+	loop {
+		match sender.write_all(payload).await {
+			Ok(_) => break Ok(payload.len()),
+			Err(e) if e.kind() == WouldBlock => continue,
+			Err(e) => break Err(e)
+		}
+	}
 }
 
 // retries on WOULDBLOCK
 async fn async_read<T: AsMut<[u8]>>(stream: TcpStream, receive_buffer: &mut T) -> Result<usize, tokio::io::Error> {
-	use tokio::io;
+	use tokio::io::ErrorKind::WouldBlock;
 	loop {
 		stream.ready(Interest::READABLE).await?;
 		match stream.try_read(&mut receive_buffer.as_mut()) {
-			Ok(n)                                           => break Ok(n),
-			Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
-			Err(e)                                          => break Err(e)
+			Ok(n)                            => break Ok(n),
+			Err(e) if e.kind() == WouldBlock => continue,
+			Err(e)                           => break Err(e)
 		}
 	}
 }
@@ -71,6 +85,6 @@ async fn main() {
 	let payload = "Hello, remote world!".as_bytes();
 	let send_task = send_data(localhost, payload);
 	let receive_task = receive_data(localhost, payload.len());
-	let (received_payload, bytes_sent) = futures::future::join(receive_task, send_task).await;
+	let (received_payload, bytes_sent) = futures::future::join(send_task, receive_task).await;
 	println!("[{:?}]: {:?}", bytes_sent, received_payload);
 }
