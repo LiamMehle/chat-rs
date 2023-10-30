@@ -32,13 +32,8 @@ async fn send_data(address: &str, payload: &[u8]) -> Result<usize, std::io::Erro
 		}
 	};
 	sender.ready(Interest::WRITABLE).await?;
-	loop {
-		match sender.write_all(payload).await {
-			Ok(_) => break Ok(payload.len()),
-			Err(e) if e.kind() == WouldBlock => continue,
-			Err(e) => break Err(e)
-		}
-	}
+	// sender is guaranteed to be ready for a write op
+	sender.write_all(payload).await.map(|_| payload.len())
 }
 
 // retries on WOULDBLOCK
