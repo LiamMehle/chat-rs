@@ -34,7 +34,7 @@ where Fut: futures::Future<Output=Result<T, E>> {
 	loop {
 		match task().await {
 			Ok(x) => break Ok(x),
-			Err(e) if retry_predicate(&e) => continue,
+			Err(e) if retry_predicate(&e) => tokio::task::yield_now().await,
 			Err(e) => break Err(e)
 		}
 	}
@@ -58,20 +58,6 @@ async fn async_read<T: AsMut<[u8]>>(stream: TcpStream, receive_buffer: &mut T) -
 	retry_if(||{stream.try_read(&mut receive_buffer.as_mut())}, should_retry_on)
 }
 
-async fn async_read_exact<T: AsMut<[u8]>>(stream: TcpStream, receive_buffer: &mut T) -> Result<usize, tokio::io::Error> {
-	use tokio::io;
-	let mut buffer_free_slice = receive_buffer.as_mut();
-	loop {
-		stream.ready(Interest::READABLE).await?;
-		match stream.try_read(&mut buffer_free_slice.as_mut()) {
-			Ok(n) if n == buffer_free_slice.len()           => break Ok(n),
-			Ok(n)                                           => buffer_free_slice = buffer_free_slice[n..].as_mut(),
-			Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
-			Err(e)                                          => break Err(e)
-		}
-	}
-}
-
 async fn receive_data(address: &str, expected_len: usize) -> Result<String, std::io::Error> {
 	let listener = TcpListener::bind(address).await?;
 	println!("listener created");
@@ -89,6 +75,6 @@ async fn main() {
 	let payload = "Hello, remote world!".as_bytes();
 	let send_task = send_data(localhost, payload);
 	let receive_task = receive_data(localhost, payload.len());
-	let (received_payload, bytes_sent) = futures::future::join(send_task, receive_task).await;
+	let (received_payload, bytes_sent) = futures::future::join(receive_task, send_task).await;
 	println!("[{:?}]: {:?}", bytes_sent, received_payload);
 }
