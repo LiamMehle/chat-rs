@@ -65,16 +65,42 @@ async fn receive_data(address: &str, expected_len: usize) -> Result<String, std:
 	// assert_eq!(sender_address.to_owned().to_string().as_str(), address);
 	let mut receive_buffer = Vec::with_capacity(expected_len);
 	receive_buffer.resize(expected_len, 0);
+	stream.ready(Interest::READABLE).await?;
 	let receive_length = async_read(stream, &mut receive_buffer).await?;
 	String::from_utf8(receive_buffer[..receive_length].to_vec()).map_err(|error| Error::new(std::io::ErrorKind::Other, error))
 }
 
 #[tokio::main]
 async fn main() {
-	let localhost = "127.0.0.1:1239";
-	let payload = "Hello, remote world!".as_bytes();
-	let send_task = send_data(localhost, payload);
-	let receive_task = receive_data(localhost, payload.len());
-	let (received_payload, bytes_sent) = futures::future::join(receive_task, send_task).await;
-	println!("[{:?}]: {:?}", bytes_sent, received_payload);
+	
+}
+
+#[cfg(test)]
+mod tests {
+	#[tokio::test]
+	async fn socket_connection() {
+		use crate::*;
+		let localhost = "127.0.0.1:1239";
+		let payload = "Hello, remote world!".as_bytes();
+		let send_task = send_data(localhost, payload);
+		let receive_task = receive_data(localhost, payload.len());
+		let (received_payload, bytes_sent) = futures::future::join(send_task, receive_task).await;
+		assert!(bytes_sent.is_ok());
+		assert!(received_payload.is_ok());
+		let bytes_sent_count = bytes_sent.unwrap().len();
+		let received_payload_len = received_payload.unwrap();
+		assert_eq!(received_payload_len, bytes_sent_count);
+		assert_eq!(payload.len(), bytes_sent_count);
+	}
+	#[tokio::test]
+	async fn socket_address_in_use() {
+		use crate::*;
+		let localhost = "127.0.0.1:1239";
+		let payload = "Hello, remote world!".as_bytes();
+		let send_task = send_data(localhost, payload);
+		let send_task2 = send_data(localhost, payload);
+		let (send_result, send_result2) = futures::future::join(send_task, send_task2).await;
+		assert!(send_result.is_err() || send_result2.is_err());
+		assert!(send_result.unwrap_err().kind() == tokio::io::ErrorKind::AddrInUse || send_result2.unwrap_err().kind() == tokio::io::ErrorKind::AddrInUse);
+	}
 }
