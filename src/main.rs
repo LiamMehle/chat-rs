@@ -22,9 +22,8 @@ impl<F: Copy + FnOnce() -> ()> Drop for OnDrop<F> {
 fn retry_if<T, E>(mut task: impl FnMut()->Result<T, E>, retry_predicate: impl Fn(&E)->bool) -> Result<T, E> {
 	loop {
 		match task() {
-			Ok(x) => break Ok(x),
 			Err(e) if retry_predicate(&e) => continue,
-			Err(e) => break Err(e)
+			x => break x
 		}
 	}
 }
@@ -33,9 +32,8 @@ async fn async_retry_if<Fut, T, E>(task: impl Fn()->Fut, retry_predicate: impl F
 where Fut: futures::Future<Output=Result<T, E>> {
 	loop {
 		match task().await {
-			Ok(x) => break Ok(x),
 			Err(e) if retry_predicate(&e) => tokio::task::yield_now().await,
-			Err(e) => break Err(e)
+			x => break x
 		}
 	}
 }
@@ -45,7 +43,8 @@ async fn send_data(address: &str, payload: &[u8]) -> Result<usize, std::io::Erro
 	use tokio::io::ErrorKind::{WouldBlock, ConnectionRefused, NotConnected};
 	let _ = OnDrop::new(||{println!("send_data exited")});
 	let should_retry_on = |e: &tokio::io::Error| { [WouldBlock, ConnectionRefused, NotConnected].contains(&e.kind()) };
-	let mut sender = async_retry_if(||{TcpStream::connect(address)}, should_retry_on).await?;
+	let connect = ||{TcpStream::connect(address)};
+	let mut sender = async_retry_if(connect, should_retry_on).await?;
 	sender.ready(Interest::WRITABLE).await?;
 	// sender is guaranteed to be ready for a write op
 	sender.write_all(payload).await.map(|_| payload.len())
@@ -55,7 +54,8 @@ async fn send_data(address: &str, payload: &[u8]) -> Result<usize, std::io::Erro
 async fn async_read<T: AsMut<[u8]>>(stream: TcpStream, receive_buffer: &mut T) -> Result<usize, tokio::io::Error> {
 	use tokio::io::ErrorKind::WouldBlock;
 	let should_retry_on = |e: &tokio::io::Error| { e.kind() == WouldBlock };
-	retry_if(||{stream.try_read(&mut receive_buffer.as_mut())}, should_retry_on)
+	let read_from_stream = ||{stream.try_read(&mut receive_buffer.as_mut())};
+	retry_if(read_from_stream, should_retry_on)
 }
 
 async fn receive_data(address: &str, expected_len: usize) -> Result<String, std::io::Error> {
