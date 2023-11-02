@@ -1,9 +1,7 @@
 use core::slice;
 use std::io::ErrorKind;
-use std::mem;
 
 use futures::TryFutureExt;
-use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 use tokio::io::{Result, Interest, Error, ErrorKind::{WouldBlock, ConnectionRefused, NotConnected}};
 
@@ -17,20 +15,19 @@ pub async fn connect_to_addr(address: &str) -> Result<TcpStream> {
 	async_retry_if(connect, should_retry_on).await
 }
 
-fn into_packet<'a, T>(data: &'a T) -> (usize, impl Iterator<Item=&'a u8>) {
-	let data_digest = unsafe { slice::from_raw_parts(&data as *const _ as *const u8, std::mem::size_of::<T>()) };
-	let data_len: usize = data_digest.len();
-	let data_len_digest: &[u8] = unsafe { slice::from_raw_parts(&data_len as *const _ as *const u8, std::mem::size_of::<usize>()) };
+fn into_packet<'a, T>(data: &'a T) -> Vec<u8> {
+	use std::io::Read;
+	let len_len = std::mem::size_of::<u32>();
+	let data_len = std::mem::size_of::<T>();
+	let output_len = len_len + data_len;
+	let mut output = Vec::<u8>::with_capacity(output_len);
+	unsafe { output.set_len(output_len) };
+	let mut len_slice = unsafe { std::slice::from_raw_parts(&data_len as *const _ as *const u8, len_len) };
+	let mut data_slice = unsafe { std::slice::from_raw_parts(data as *const T as *const u8, data_len) };
+	let _ = len_slice.read_exact(output[..len_len].as_mut());
+	let _ = data_slice.read_exact(output[len_len..].as_mut());
 
-	(data_len, data_len_digest.into_iter().chain(data_digest))
-}
-
-fn into_packet_vec<T>(data: &T) -> Vec<u8> {
-	let (len, data) = into_packet(data);
-	let mut vec = Vec::with_capacity(len);
-	vec.extend(data);
-
-	vec
+	output
 }
 
 async fn await_writable(connection: &TcpStream) -> tokio::io::Result<tokio::io::Ready> {
@@ -54,21 +51,24 @@ async fn await_readable(connection: &TcpStream) -> tokio::io::Result<tokio::io::
 pub async fn send_packet<T>(connection: &mut TcpStream, data: &T) -> Result<()> {
 	use tokio::io::AsyncWriteExt;
 
-	let packet = into_packet_vec(data);
+	let packet = into_packet(data);
 	let _ = await_writable(&connection).await;
 	connection.write_all(packet.as_ref()).await
 }
 
 #[allow(dead_code)]
 pub async unsafe fn read_packet<T: Sized, const T_SIZE: usize>(connection: &mut TcpStream) -> Result<T> {
-	const USIZE_LEN: usize = std::mem::size_of::<usize>();
+	use tokio::io::AsyncReadExt;
+
+	const LEN_LEN: usize = std::mem::size_of::<u32>();
 	assert_eq!(std::mem::size_of::<T>(), T_SIZE);
 	
 	let _ = await_readable(&connection).await?;
-	let mut len_buffer = [0u8; USIZE_LEN];
-	connection.read(&mut len_buffer).await?;
-	let len: usize = std::mem::transmute(len_buffer);
-	if len != std::mem::size_of::<T>() {
+	let mut packet_len = 0u32;
+	let packet_len_slice = slice::from_raw_parts_mut(&mut packet_len as *mut _ as *mut u8, std::mem::size_of::<u32>());
+	connection.read(packet_len_slice).await?;
+	if packet_len as usize != std::mem::size_of::<T>() {
+		println!("packet header shows size of {}, but expected type is of size {}", packet_len, std::mem::size_of::<T>());
 		return Err(Error::new(ErrorKind::InvalidData, "wrong type expected"));
 	}
 	let mut known_size_buffer =  [0u8; T_SIZE];
