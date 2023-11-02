@@ -38,7 +38,6 @@ mod tests {
 
 	#[tokio::test]
 	async fn socket_connection() {
-		use crate::*;
 		let localhost = "127.0.0.1:1239";
 		let payload = "Hello, remote world!".as_bytes();
 		let send_task = connect_and_send(localhost, payload);

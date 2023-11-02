@@ -1,6 +1,6 @@
 use std::mem;
 
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio::io::{Result, Interest, Error, ErrorKind::{WouldBlock, ConnectionRefused, NotConnected}};
 
 #[allow(dead_code)]
