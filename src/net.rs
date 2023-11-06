@@ -5,6 +5,92 @@ use futures::TryFutureExt;
 use tokio::net::TcpStream;
 use tokio::io::{Result, Interest, Error, ErrorKind::{WouldBlock, ConnectionRefused, NotConnected}};
 
+type PacketId = u8;
+
+trait Serialize {
+	fn seriazlie(&self) -> Vec<u8>;
+}
+
+trait Deserialize where Self: Sized {
+	fn deseriazlie(buffer: impl AsRef<[u8]>) -> Option<Self>;
+}
+
+#[derive(PartialEq, PartialOrd, Debug, Clone)]
+struct Login {
+	pub username: String,
+	pub hashed_password: String
+}
+
+const LOGIN_DISCRIMINANT: PacketId = 1;
+const MESSAGE_DISCRIMINANT: PacketId = 1;
+const MESSAGE_LOGS_REQUEST_DISCRIMINANT: PacketId = 1;
+const MESSAGE_LOGS_DISCRIMINANT: PacketId = 1;
+
+#[derive(PartialEq, PartialOrd, Debug, Clone)]
+enum Action {
+	Login(Login),
+	Message,
+	MessageLogsRequest,
+	MessageLogs
+}
+
+impl Serialize for Action {
+	fn seriazlie(&self) -> Vec<u8> {
+		const MAX_EXPECTED_PACKET_SIZE: usize = 2048;
+		let mut output = Vec::with_capacity(MAX_EXPECTED_PACKET_SIZE);
+		match self {
+			Self::Login(fields) => {
+				output.push(LOGIN_DISCRIMINANT);
+				output.extend_from_slice(fields.username.as_bytes());
+				output.push('|' as u8);
+				output.extend_from_slice(fields.hashed_password.as_bytes());
+			},
+			Self::Message => {},
+			Self::MessageLogsRequest => {},
+			Self::MessageLogs => {}
+		}
+
+		output
+	}
+}
+
+impl Deserialize for Action {
+	fn deseriazlie(buffer: impl AsRef<[u8]>) -> Option<Self> {
+		const ID_LEN:usize = std::mem::size_of::<PacketId>();
+		let buffer = buffer.as_ref();
+		// to_be() does the same as a "from_be", if the machine is big endian, it's a no-op, if it's little endian, the bytes are swapped.
+		// network order is big-endian
+		let variant_id = unsafe { std::mem::transmute::<[u8; ID_LEN], PacketId>(buffer[..ID_LEN].try_into().unwrap()) }.to_be();
+		let payload = &buffer[ID_LEN..];
+
+		match variant_id {
+			x if x == LOGIN_DISCRIMINANT => {
+				let mut parts = payload.split(|c| *c == '|' as u8);
+				let raw_username = parts.next()?;
+				let raw_password = parts.next()?;
+				let username = String::from_utf8(raw_username.to_owned()).ok()?;
+				let password = String::from_utf8(raw_password.to_owned()).ok()?;
+				Some(Self::Login(Login {
+					username: username,
+					hashed_password: password
+				}))
+			},
+			// x if x == message => {todo!()},
+			// x if x == request_message_log => {todo!()},
+			// x if x == message_log => {todo!()}
+			_ => {todo!()}
+		}
+	}
+}
+
+#[allow(dead_code)]
+#[repr(C)]
+struct Packet {
+	size: u32,
+	action: Action,
+	data: ()
+}
+
 #[allow(dead_code)]
 pub async fn connect_to_addr(address: &str) -> Result<TcpStream> {
 	use crate::combinator::async_retry_if;
@@ -86,4 +172,18 @@ pub async unsafe fn read_packet<T: Sized, const T_SIZE: usize>(connection: &mut 
 #[macro_export]
 macro_rules! read_packet {
 	($t:ty, $c:expr) => { read_packet::< $t, {std::mem::size_of::<$t>()} >($c) }
+}
+
+
+#[cfg(test)]
+pub mod tests {
+    use crate::net::{Serialize, Deserialize};
+	#[test]
+	fn login_packet() {
+		use crate::net;
+		let action = net::Action::Login(net::Login {username: "1234".to_owned(), hashed_password: "5678".to_owned()});
+		let packet_data = action.seriazlie();
+		let deserialized_action = net::Action::deseriazlie(packet_data).unwrap();
+		assert_eq!(deserialized_action, action);
+	}
 }
