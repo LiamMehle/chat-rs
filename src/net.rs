@@ -21,36 +21,66 @@ struct Login {
 	pub hashed_password: String
 }
 
+#[derive(PartialEq, PartialOrd, Debug, Clone)]
+struct Message {
+	pub from: String,
+	pub to: String,
+	pub message: String
+}
+
+impl Serialize for Login {
+	fn seriazlie(&self) -> Vec<u8> {
+		const SEP: u8 = '|' as u8;
+		const SEP_LEN: usize = 1;
+
+		let mut output = Vec::with_capacity(self.username.len()+SEP_LEN+self.hashed_password.len());
+		output.push(LOGIN_DISCRIMINANT);
+		output.extend_from_slice(self.username.as_bytes());
+		output.push(SEP);
+		output.extend_from_slice(self.hashed_password.as_bytes());
+
+		output
+	}
+}
+
+impl Deserialize for Login {
+	fn deseriazlie(buffer: impl AsRef<[u8]>) -> Option<Self> {
+		let mut parts = buffer.as_ref().split(|c| *c == '|' as u8);
+		let raw_username = parts.next()?;
+		let raw_password = parts.next()?;
+		let username = String::from_utf8(raw_username.to_owned()).ok()?;
+		let password = String::from_utf8(raw_password.to_owned()).ok()?;
+		
+		if let Some(_) = parts.next() { return None }
+
+		Some(Login {
+			username: username,
+			hashed_password: password
+		})
+	}
+}
+
 const LOGIN_DISCRIMINANT: PacketId = 1;
-const MESSAGE_DISCRIMINANT: PacketId = 1;
-const MESSAGE_LOGS_REQUEST_DISCRIMINANT: PacketId = 1;
-const MESSAGE_LOGS_DISCRIMINANT: PacketId = 1;
+const MESSAGE_DISCRIMINANT: PacketId = 2;
+const MESSAGE_LOGS_REQUEST_DISCRIMINANT: PacketId = 3;
+const MESSAGE_LOGS_DISCRIMINANT: PacketId = 4;
 
 #[derive(PartialEq, PartialOrd, Debug, Clone)]
 enum Action {
 	Login(Login),
-	Message,
+	Message(Message),
 	MessageLogsRequest,
 	MessageLogs
 }
 
 impl Serialize for Action {
 	fn seriazlie(&self) -> Vec<u8> {
-		const MAX_EXPECTED_PACKET_SIZE: usize = 2048;
-		let mut output = Vec::with_capacity(MAX_EXPECTED_PACKET_SIZE);
 		match self {
-			Self::Login(fields) => {
-				output.push(LOGIN_DISCRIMINANT);
-				output.extend_from_slice(fields.username.as_bytes());
-				output.push('|' as u8);
-				output.extend_from_slice(fields.hashed_password.as_bytes());
-			},
-			Self::Message => {},
-			Self::MessageLogsRequest => {},
-			Self::MessageLogs => {}
+			Self::Login(x) => x.seriazlie(),
+			Self::Message(_) => todo!(),
+			Self::MessageLogsRequest => todo!(),
+			Self::MessageLogs => todo!()
 		}
-
-		output
 	}
 }
 
@@ -64,31 +94,13 @@ impl Deserialize for Action {
 		let payload = &buffer[ID_LEN..];
 
 		match variant_id {
-			x if x == LOGIN_DISCRIMINANT => {
-				let mut parts = payload.split(|c| *c == '|' as u8);
-				let raw_username = parts.next()?;
-				let raw_password = parts.next()?;
-				let username = String::from_utf8(raw_username.to_owned()).ok()?;
-				let password = String::from_utf8(raw_password.to_owned()).ok()?;
-				Some(Self::Login(Login {
-					username: username,
-					hashed_password: password
-				}))
-			},
+			x if x == LOGIN_DISCRIMINANT => Login::deseriazlie(payload).map(|x| Self::Login(x)),
 			// x if x == message => {todo!()},
 			// x if x == request_message_log => {todo!()},
 			// x if x == message_log => {todo!()}
 			_ => {todo!()}
 		}
 	}
-}
-
-#[allow(dead_code)]
-#[repr(C)]
-struct Packet {
-	size: u32,
-	action: Action,
-	data: ()
 }
 
 #[allow(dead_code)]
